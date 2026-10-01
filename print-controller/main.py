@@ -15,6 +15,7 @@ from downloader import download_file, DownloadError
 from validator import is_valid_pdf
 from printer import print_file, PrintError
 from updater import mark_printed, mark_failed
+from printer_monitor import update_printer_status
 
 
 def recover_stale_jobs(supabase: Client) -> None:
@@ -41,13 +42,25 @@ def recover_stale_jobs(supabase: Client) -> None:
 def run_one_cycle(supabase: Client, config: Config) -> None:
     """
     Executes one polling cycle:
-    1. Claim next job
-    2. Download file
-    3. Validate PDF header
-    4. Print file
-    5. Update status
-    6. Delete temp file (in finally block)
+    1. Check printer health
+    2. Claim next job (skip if printer has a blocking error)
+    3. Download file
+    4. Validate PDF header
+    5. Print file
+    6. Update status
+    7. Delete temp file (in finally block)
     """
+    # Always update printer health in Supabase
+    health = update_printer_status(supabase, config.printer_name)
+
+    # Block printing if printer has a hard error
+    if not health["is_online"] or health["error_type"] in ("paper_empty", "paper_jam", "offline"):
+        logger.warning(
+            "Printer not ready (error_type=%s): %s — skipping job dispatch",
+            health["error_type"], health["error_message"]
+        )
+        return
+
     try:
         job = claim_next_job(supabase)
     except Exception as e:
@@ -90,6 +103,8 @@ def run_one_cycle(supabase: Client, config: Config) -> None:
     except PrintError as e:
         logger.error("Job %s failed during printing: %s", job_id, e)
         mark_failed(supabase, job_id, str(e))
+        # After a print failure, re-check printer health and update status
+        update_printer_status(supabase, config.printer_name)
     except Exception as e:
         logger.exception("Job %s encountered unexpected error: %s", job_id, e)
         mark_failed(supabase, job_id, f"Unexpected error: {e}")
@@ -108,6 +123,9 @@ def run_forever(config: Config) -> None:
                 config.printer_name, config.poll_interval)
     supabase = create_client(config.supabase_url, config.supabase_service_role_key)
     recover_stale_jobs(supabase)
+
+    # Immediately update printer status on startup
+    update_printer_status(supabase, config.printer_name)
 
     while True:
         try:
