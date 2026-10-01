@@ -17,6 +17,8 @@ export interface PrintJob {
   printed_at: string | null;
   total_price: number;
   page_count: number;
+  estimated_sheets_printed?: number;
+  print_progress_known?: boolean;
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {

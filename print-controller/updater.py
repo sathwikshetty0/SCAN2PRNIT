@@ -23,6 +23,25 @@ def mark_printed(supabase: Client, job_id: str) -> None:
     }).eq("id", job_id).execute()
 
 
+def record_print_progress(
+    supabase: Client, job_id: str, cumulative_sheets: int
+) -> tuple[int, int | None, bool]:
+    """Atomically save progress, decrement inventory, and report threshold crossings."""
+    result = supabase.rpc(
+        "record_print_progress",
+        {"p_job_id": job_id, "p_cumulative_sheets": cumulative_sheets},
+    ).execute()
+    if not result.data:
+        raise RuntimeError("Print progress update returned no result")
+
+    progress = result.data[0]
+    return (
+        progress["estimated_sheets_printed"],
+        progress["remaining_sheets"],
+        progress["low_alert"],
+    )
+
+
 def mark_failed(supabase: Client, job_id: str, error_message: Optional[str] = None) -> None:
     """Mark a job as FAILED and record error_message."""
     supabase.table("print_jobs").update({

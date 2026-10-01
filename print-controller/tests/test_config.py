@@ -46,20 +46,26 @@ def _call_load_config(env: dict) -> None:
 
 def test_load_config_exits_when_supabase_url_missing():
     """load_config raises SystemExit when SUPABASE_URL is not set."""
-    with patch.dict(os.environ, _env_without('SUPABASE_URL'), clear=True):
+    env = _env_without('SUPABASE_URL')
+    env['PYTHON_DOTENV_DISABLED'] = 'true'
+    with patch.dict(os.environ, env, clear=True):
         with pytest.raises(SystemExit):
             _call_load_config(_env_without('SUPABASE_URL'))
 
 
 def test_load_config_exits_when_supabase_service_role_key_missing():
     """load_config raises SystemExit when SUPABASE_SERVICE_ROLE_KEY is not set."""
-    with patch.dict(os.environ, _env_without('SUPABASE_SERVICE_ROLE_KEY'), clear=True):
+    env = _env_without('SUPABASE_SERVICE_ROLE_KEY')
+    env['PYTHON_DOTENV_DISABLED'] = 'true'
+    with patch.dict(os.environ, env, clear=True):
         with pytest.raises(SystemExit):
             _call_load_config(_env_without('SUPABASE_SERVICE_ROLE_KEY'))
 
 
 def test_load_config_exits_when_printer_name_missing():
     """load_config raises SystemExit when PRINTER_NAME is not set."""
-    with patch.dict(os.environ, _env_without('PRINTER_NAME'), clear=True):
+    env = _env_without('PRINTER_NAME')
+    env['PYTHON_DOTENV_DISABLED'] = 'true'
+    with patch.dict(os.environ, env, clear=True):
         with pytest.raises(SystemExit):
             _call_load_config(_env_without('PRINTER_NAME'))

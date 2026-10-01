@@ -13,6 +13,8 @@ import time
 import subprocess
 from datetime import datetime, timezone
 
+from logger import logger
+
 STATUS_ROW_ID = "00000000-0000-0000-0000-000000000001"
 
 
@@ -123,5 +125,5 @@ def update_printer_status(supabase, printer_name: str) -> dict:
             "printer_name":  printer_name,
         }).execute()
     except Exception as e:
-        pass  # Non-critical — don't crash the main loop
+        logger.error("Failed to update printer status in Supabase: %s", e)
     return health

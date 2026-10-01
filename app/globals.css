@@ -129,6 +129,17 @@ body {
   border-top: 1px solid var(--indigo-100);
 }
 
+/* Admin login and dashboard use the full viewport instead of the kiosk column. */
+.bg-gradient:has([data-admin-dashboard]) > .header-bar,
+.bg-gradient:has([data-admin-dashboard]) > .page-footer {
+  display: none;
+}
+
+.page-main:has(> [data-admin-dashboard]) {
+  max-width: none;
+  padding: 0;
+}
+
 /* ── Cards ── */
 .card {
   background: white;

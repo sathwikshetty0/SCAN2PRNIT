@@ -8,7 +8,10 @@ module.exports = {
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
-      tsconfig: 'tsconfig.json',
+      tsconfig: {
+        ...require('./tsconfig.json').compilerOptions,
+        jsx: 'react-jsx',
+      },
     }],
   },
   testPathIgnorePatterns: ['/node_modules/', '/dist/', '/e2e/'],

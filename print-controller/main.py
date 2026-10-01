@@ -15,7 +15,7 @@ from poller import claim_next_job
 from downloader import download_file, DownloadError
 from validator import is_valid_pdf
 from printer import print_file, PrintError
-from updater import mark_printed, mark_failed
+from updater import mark_printed, mark_failed, record_print_progress
 from printer_monitor import update_printer_status
 from telegram_notify import notify_printer_error, notify_paper_low, notify_job_failed
 
@@ -70,12 +70,6 @@ def run_one_cycle(supabase: Client, config: Config, telegram_token: str = "", te
             notify_printer_error(telegram_token, telegram_chat_id, error_type,
                                  health["error_message"], config.printer_name)
             _last_notified[error_type] = now
-    elif error_type == "paper_low":
-        last = _last_notified.get("paper_low", 0)
-        if now - last >= _TELEGRAM_COOLDOWN_SECONDS:
-            notify_paper_low(telegram_token, telegram_chat_id, config.printer_name)
-            _last_notified["paper_low"] = now
-
     # Block printing if printer has a hard error
     if not health["is_online"] or health["error_type"] in ("paper_empty", "paper_jam", "offline"):
         logger.warning(
@@ -105,6 +99,10 @@ def run_one_cycle(supabase: Client, config: Config, telegram_token: str = "", te
     try:
         # Download file
         downloaded_file = download_file(supabase, file_path_str, temp_dir)
+        job_file = temp_dir / f"{job_id}.pdf"
+        if downloaded_file != job_file:
+            downloaded_file.replace(job_file)
+            downloaded_file = job_file
 
         # Validate magic bytes
         if not is_valid_pdf(downloaded_file):
@@ -114,7 +112,49 @@ def run_one_cycle(supabase: Client, config: Config, telegram_token: str = "", te
 
         # Dispatch to printer
         logger.info("Printing job %s to printer '%s'...", job_id, config.printer_name)
-        print_file(downloaded_file, config.printer_name, copies)
+        expected_sheets = int(job.get("page_count", 1)) * int(copies)
+        recorded_sheets = 0
+
+        def on_print_progress(cumulative_sheets: int) -> None:
+            nonlocal recorded_sheets
+            bounded_sheets = min(expected_sheets, max(recorded_sheets, cumulative_sheets))
+            if bounded_sheets == recorded_sheets:
+                return
+
+            try:
+                recorded_sheets, remaining, low_alert = record_print_progress(
+                    supabase, job_id, bounded_sheets
+                )
+                if low_alert and remaining is not None:
+                    notify_paper_low(telegram_token, telegram_chat_id, config.printer_name, remaining)
+            except Exception:
+                logger.exception("Could not persist paper progress for job %s", job_id)
+
+        def on_printer_health_check() -> None:
+            health_during_print = update_printer_status(supabase, config.printer_name)
+            current_error = health_during_print.get("error_type")
+            if current_error not in ("paper_empty", "paper_jam", "offline"):
+                return
+
+            last_alert = _last_notified.get(current_error, 0)
+            if time.time() - last_alert >= _TELEGRAM_COOLDOWN_SECONDS:
+                notify_printer_error(
+                    telegram_token,
+                    telegram_chat_id,
+                    current_error,
+                    health_during_print.get("error_message", "Printer error"),
+                    config.printer_name,
+                )
+                _last_notified[current_error] = time.time()
+
+        print_file(
+            downloaded_file,
+            config.printer_name,
+            copies,
+            expected_sheets=expected_sheets,
+            progress_callback=on_print_progress,
+            health_callback=on_printer_health_check,
+        )
 
         # Mark printed
         mark_printed(supabase, job_id)

@@ -1,4 +1,4 @@
-// Feature: a4-print-kiosk, Property 8: RLS anon key cannot escalate payment status to PAID
+// Feature: a4-print-kiosk, Property 8: anonymous clients cannot access protected job data
 
 import * as fc from 'fast-check';
 import { createClient } from '@supabase/supabase-js';
@@ -6,7 +6,7 @@ import { createClient } from '@supabase/supabase-js';
 /**
  * Validates: Requirements 5.6, 8.4
  *
- * Property 8: RLS anon key cannot escalate payment status to PAID
+ * Property 8: anonymous clients cannot read protected job data or set payment status.
  *
  * For any existing print_jobs row, an UPDATE operation targeting
  * payment_status = 'PAID' issued with the Anon_Key SHALL be rejected
@@ -53,6 +53,11 @@ describe('Property 8: RLS anon key cannot escalate payment status to PAID', () =
             .update({ payment_status: 'PAID' })
             .eq('id', jobId);
 
+          const { data: visibleRows, error: selectError } = await anonClient
+            .from('print_jobs')
+            .select('id')
+            .eq('id', jobId);
+
           // Verify row was NOT updated to PAID
           const { data: fetchRow } = await serviceClient
             .from('print_jobs')
@@ -61,6 +66,8 @@ describe('Property 8: RLS anon key cannot escalate payment status to PAID', () =
             .single();
 
           expect(fetchRow?.payment_status).toBe('PENDING');
+          expect(selectError).toBeNull();
+          expect(visibleRows).toEqual([]);
         } finally {
           // Cleanup
           await serviceClient.from('print_jobs').delete().eq('id', jobId);

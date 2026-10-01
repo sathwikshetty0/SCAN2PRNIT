@@ -253,6 +253,10 @@ Run the migration located at:
 supabase/migrations/001_print_jobs.sql
 ```
 
+Also apply the remaining migrations in `supabase/migrations/` in filename order.
+The print-progress migration enables Realtime updates, adds the paper inventory
+and progress estimate, and installs the inventory RPCs used by the controller.
+
 The database contains a `print_jobs` table with fields for:
 
 * Job ID
@@ -265,6 +269,11 @@ The database contains a `print_jobs` table with fields for:
 * Creation timestamp
 * Print timestamp
 * Error information
+
+The later security migration removes anonymous table-wide job reads. User status
+pages load only the requested job's public status fields through
+`/api/print-status/{job_id}`; the unguessable UUID must be retained as the job
+link.
 
 ### Storage
 
@@ -302,9 +311,13 @@ NEXT_PUBLIC_COLOUR_SURCHARGE=0.10
 NEXT_PUBLIC_CURRENCY=GBP
 
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ADMIN_PIN=choose-a-private-pin
 ```
 
 > ⚠️ **Never commit `.env` or `.env.local` files to GitHub.**
+>
+> `ADMIN_PIN` is checked on the server. Set a private value before opening the
+> admin dashboard; there is no built-in PIN.
 
 ---
 
@@ -322,7 +335,15 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 
 PRINTER_NAME=HP_LaserJet_A4
 POLL_INTERVAL_SECONDS=10
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
+
+On first use, set the current tray count in the admin dashboard. Record each
+refill there; the controller decrements the count from Windows spooler progress
+and alerts Telegram when the estimate reaches 15 sheets. Spooler counts are
+estimates, not a physical sensor reading; record wasted sheets in the dashboard
+to correct the estimate.
 
 ---
 

@@ -1,46 +1,46 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
+import { requireAdmin } from '@/lib/admin-auth';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const unauthorized = requireAdmin(request);
+  if (unauthorized) return unauthorized;
+
   try {
     const supabase = createServerClient();
 
-    // Fetch all print jobs (last 100)
-    const { data: jobs, error: jobsError } = await supabase
-      .from('print_jobs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
-
-    if (jobsError) throw jobsError;
-
-    // Fetch printer status — tolerate table-not-found gracefully
-    let printerStatus = null;
-    try {
-      const { data: printerRows, error: printerError } = await supabase
+    const [{ data: jobs, error: jobsError }, { data: printerStatus, error: printerError },
+      { data: kioskSettings, error: settingsError }, { data: paperInventory, error: inventoryError }] = await Promise.all([
+      supabase
+        .from('print_jobs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100),
+      supabase
         .from('printer_status')
         .select('*')
-        .limit(1);
-      if (!printerError) {
-        printerStatus = printerRows?.[0] ?? null;
-      }
-    } catch {
-      // printer_status table may not exist yet — dashboard shows "unknown"
-    }
-
-    // Fetch kiosk paused state
-    let kioskPaused = false;
-    try {
-      const { data: ks } = await supabase
+        .eq('id', '00000000-0000-0000-0000-000000000001')
+        .maybeSingle(),
+      supabase
         .from('kiosk_settings')
         .select('is_paused')
         .eq('id', '00000000-0000-0000-0000-000000000001')
-        .single();
-      kioskPaused = ks?.is_paused ?? false;
-    } catch {}
+        .maybeSingle(),
+      supabase
+        .from('paper_inventory')
+        .select('remaining_sheets, updated_at')
+        .eq('id', 1)
+        .maybeSingle(),
+    ]);
+
+    if (jobsError) throw jobsError;
+    if (printerError) throw printerError;
+    if (settingsError) throw settingsError;
+    if (inventoryError) throw inventoryError;
 
     // Compute stats
     const paid = jobs?.filter(j => j.payment_status === 'PAID') ?? [];
+    const printed = paid.filter(j => j.job_status === 'PRINTED');
     const today = new Date().toISOString().slice(0, 10);
     const todayJobs = paid.filter(j => j.created_at.startsWith(today));
 
@@ -49,12 +49,18 @@ export async function GET() {
       todayRevenue:    todayJobs.reduce((s, j) => s + (j.total_price ?? 0), 0),
       totalJobs:       paid.length,
       todayJobs:       todayJobs.length,
-      totalPages:      paid.reduce((s, j) => s + (j.page_count ?? 0) * (j.copies ?? 1), 0),
+      totalPages:      printed.reduce((s, j) => s + (j.page_count ?? 0) * (j.copies ?? 1), 0),
       failedJobs:      jobs?.filter(j => j.job_status === 'FAILED').length ?? 0,
       printingJobs:    jobs?.filter(j => j.job_status === 'PRINTING').length ?? 0,
     };
 
-    return NextResponse.json({ jobs, printerStatus, stats, kioskPaused });
+    return NextResponse.json({
+      jobs,
+      printerStatus,
+      paperInventory,
+      stats,
+      kioskPaused: kioskSettings?.is_paused ?? false,
+    });
   } catch (err: any) {
     console.error('[admin/jobs] error:', err);
     return NextResponse.json(

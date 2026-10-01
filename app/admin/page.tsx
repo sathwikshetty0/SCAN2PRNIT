@@ -24,32 +24,54 @@ interface Stats {
   printingJobs: number;
 }
 
-/* ─── PIN Gate ───────────────────────────────────────────── */
-const ADMIN_PIN = '1234';
+interface PaperInventory {
+  remaining_sheets: number | null;
+  updated_at?: string;
+}
 
+/* ─── PIN Gate ───────────────────────────────────────────── */
 function PinLogin({ onSuccess }: { onSuccess: () => void }) {
   const [pin, setPin]     = useState('');
   const [error, setError] = useState('');
   const [tries, setTries] = useState(0);
   const [locked, setLocked] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     if (locked) return;
-    if (pin === ADMIN_PIN) { onSuccess(); return; }
-    const next = tries + 1;
-    setTries(next);
-    setPin('');
-    if (next >= 5) {
-      setLocked(true);
-      setError('Too many attempts. Try again in 10 minutes.');
-      setTimeout(() => { setLocked(false); setTries(0); setError(''); }, 600_000);
-    } else {
-      setError(`Incorrect PIN (${5 - next} attempt${5 - next === 1 ? '' : 's'} left)`);
+    try {
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        const message = body.error ?? 'Admin login failed';
+        if (response.status === 401 || response.status === 429) {
+          const next = tries + 1;
+          setTries(next);
+          setPin('');
+          if (response.status === 429 || next >= 5) {
+            setLocked(true);
+            setError(message);
+            setTimeout(() => { setLocked(false); setTries(0); setError(''); }, 600_000);
+          } else {
+            setError(`${message} (${5 - next} attempt${5 - next === 1 ? '' : 's'} left)`);
+          }
+        } else {
+          setError(message);
+        }
+        return;
+      }
+      onSuccess();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Admin login failed';
+      setError(message);
     }
   };
 
   return (
-    <div style={{
+    <div data-admin-dashboard style={{
       minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%)',
     }}>
@@ -142,19 +164,19 @@ function StatCard({ icon, label, value, sub, color = '#4F46E5' }: {
   return (
     <div style={{
       background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-      borderRadius: 16, padding: '20px 24px',
+      borderRadius: 12, padding: '14px 16px',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
         <div style={{
-          width: 40, height: 40, borderRadius: 10, background: `${color}22`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 32, height: 32, borderRadius: 8, background: `${color}22`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         }}>
           {icon}
         </div>
-        <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', fontWeight: 500 }}>{label}</span>
+        <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.72rem', fontWeight: 500 }}>{label}</span>
       </div>
-      <div style={{ color: '#fff', fontSize: '1.75rem', fontWeight: 700 }}>{value}</div>
-      {sub && <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', marginTop: 4 }}>{sub}</div>}
+      <div style={{ color: '#fff', fontSize: '1.4rem', fontWeight: 700 }}>{value}</div>
+      {sub && <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem', marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -203,6 +225,96 @@ function PrinterBanner({ ps }: { ps: PrinterStatus | null }) {
   );
 }
 
+function PaperInventoryCard({
+  inventory,
+  onUpdated,
+}: {
+  inventory: PaperInventory | null;
+  onUpdated: () => void;
+}) {
+  const [sheets, setSheets] = useState('');
+  const [mode, setMode] = useState<'initial' | 'refill' | 'waste'>(
+    inventory?.remaining_sheets == null ? 'initial' : 'refill',
+  );
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const remaining = inventory?.remaining_sheets;
+
+  useEffect(() => {
+    setMode(remaining == null ? 'initial' : 'refill');
+  }, [remaining]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/admin/paper-inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, sheets: Number(sheets) }),
+      });
+      const body = await response.json();
+      if (!response.ok && !body.inventory) throw new Error(body.error ?? 'Inventory update failed');
+      setSheets('');
+      setMessage(body.warning ?? 'Paper inventory updated');
+      onUpdated();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Inventory update failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} style={{
+      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+      borderRadius: 12, padding: 16, display: 'flex', flexWrap: 'wrap',
+      alignItems: 'center', gap: 12, marginBottom: 20,
+    }}>
+      <div style={{ minWidth: 180, flex: '1 1 240px' }}>
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.72rem' }}>Paper in tray</div>
+        <strong style={{ fontSize: '1.2rem' }}>
+          {remaining == null ? 'Count not set' : `${remaining} sheets`}
+        </strong>
+        {remaining != null && remaining <= 15 && (
+          <div role="status" style={{ color: '#FBBF24', fontSize: '0.75rem' }}>Refill required soon</div>
+        )}
+      </div>
+      {remaining != null && (
+        <select
+          aria-label="Paper inventory action"
+          value={mode}
+          onChange={event => setMode(event.target.value as 'initial' | 'refill' | 'waste')}
+          style={{ minHeight: 40, borderRadius: 8, padding: '0 10px' }}
+        >
+          <option value="refill">Record refill</option>
+          <option value="waste">Correct wasted sheets</option>
+        </select>
+      )}
+      <input
+        aria-label={mode === 'waste' ? 'Wasted sheets' : mode === 'initial' ? 'Initial sheets in tray' : 'Sheets added'}
+        type="number"
+        min="1"
+        max="10000"
+        required
+        value={sheets}
+        onChange={event => setSheets(event.target.value)}
+        placeholder={remaining == null ? 'Initial sheets in tray' : 'Sheets'}
+        style={{ width: 160, minHeight: 40, borderRadius: 8, padding: '0 10px' }}
+      />
+      <button disabled={busy} type="submit" style={{
+        minHeight: 40, borderRadius: 8, border: 0, padding: '0 14px',
+        background: '#4F46E5', color: 'white', fontWeight: 600,
+        cursor: busy ? 'wait' : 'pointer',
+      }}>
+        {busy ? 'Saving…' : mode === 'initial' ? 'Set count' : mode === 'waste' ? 'Record waste' : 'Add refill'}
+      </button>
+      {message && <span role="status" style={{ flexBasis: '100%', fontSize: '0.75rem' }}>{message}</span>}
+    </form>
+  );
+}
+
 /* ─── Job Status Badge ───────────────────────────────────── */
 function JobBadge({ type, val }: { type: 'job' | 'payment'; val: string }) {
   const cfg: Record<string, [string, string]> = {
@@ -230,49 +342,79 @@ function JobBadge({ type, val }: { type: 'job' | 'payment'; val: string }) {
 
 /* ─── Main Dashboard ─────────────────────────────────────── */
 function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const [data, setData]       = useState<{ jobs: PrintJob[]; printerStatus: PrinterStatus | null; stats: Stats; kioskPaused: boolean } | null>(null);
+  const [data, setData]       = useState<{
+    jobs: PrintJob[];
+    printerStatus: PrinterStatus | null;
+    paperInventory: PaperInventory | null;
+    stats: Stats;
+    kioskPaused: boolean;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [kioskPaused, setKioskPaused] = useState(false);
   const [kioskToggling, setKioskToggling] = useState(false);
+  const [tgSending, setTgSending] = useState(false);
+  const [tgToast, setTgToast]     = useState<{ ok: boolean; msg: string } | null>(null);
 
   // Idle auto-logout (A5) — 30 min idle timeout, 60s warning
   const idleTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warningIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSessionRefreshRef = useRef(0);
   const [idleWarning, setIdleWarning] = useState<number | null>(null); // countdown seconds
 
+  const refreshAdminSession = useCallback(async () => {
+    if (Date.now() - lastSessionRefreshRef.current < 5 * 60 * 1_000) return;
+    lastSessionRefreshRef.current = Date.now();
+    try {
+      const response = await fetch('/api/admin/session', { method: 'POST' });
+      if (response.status === 401) {
+        onLogout();
+      } else if (!response.ok) {
+        setError('Could not refresh admin session');
+      }
+    } catch {
+      setError('Could not refresh admin session');
+    }
+  }, [onLogout]);
+
   const resetIdleTimer = useCallback(() => {
+    void refreshAdminSession();
     if (idleTimerRef.current)    clearTimeout(idleTimerRef.current);
     if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    if (warningIntervalRef.current) clearInterval(warningIntervalRef.current);
     setIdleWarning(null);
 
     // 29 min: start warning countdown
     warningTimerRef.current = setTimeout(() => {
       let remaining = 60;
       setIdleWarning(remaining);
-      const tick = setInterval(() => {
+      warningIntervalRef.current = setInterval(() => {
         remaining -= 1;
         if (remaining <= 0) {
-          clearInterval(tick);
+          if (warningIntervalRef.current) clearInterval(warningIntervalRef.current);
+          warningIntervalRef.current = null;
           setIdleWarning(null);
         } else {
           setIdleWarning(remaining);
         }
       }, 1_000);
-      // Keep reference so we can clear it
-      (warningTimerRef.current as unknown as { _tick: ReturnType<typeof setInterval> })._tick = tick;
     }, 29 * 60 * 1_000);
 
     // 30 min: logout
     idleTimerRef.current = setTimeout(() => {
       onLogout();
     }, 30 * 60 * 1_000);
-  }, [onLogout]);
+  }, [onLogout, refreshAdminSession]);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/jobs');
+      if (res.status === 401) {
+        onLogout();
+        return;
+      }
       if (!res.ok) throw new Error('Failed to load data');
       const json = await res.json();
       setData(json);
@@ -284,20 +426,19 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onLogout]);
 
   useEffect(() => {
     load();
 
-    // Supabase Realtime subscription (2a)
+    // Printer errors are pushed immediately; job rows use the three-second polling fallback.
     const supabase = createClient();
     const channel = supabase
       .channel('admin-print-jobs')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, () => load())
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'printer_status' }, () => load())
       .subscribe();
 
-    const iv = setInterval(load, 10_000); // fallback polling
+    const iv = setInterval(load, 3_000);
 
     // Idle timer setup (A5)
     resetIdleTimer();
@@ -309,6 +450,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
       supabase.removeChannel(channel);
       if (idleTimerRef.current)    clearTimeout(idleTimerRef.current);
       if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      if (warningIntervalRef.current) clearInterval(warningIntervalRef.current);
       events.forEach(ev => document.removeEventListener(ev, resetIdleTimer));
     };
   }, [load, resetIdleTimer]);
@@ -322,26 +464,48 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paused: !kioskPaused }),
       });
-      if (res.ok) {
-        setKioskPaused(p => !p);
-      }
-    } catch { /* ignore */ } finally {
+      if (!res.ok) throw new Error('Could not update kiosk state');
+      setKioskPaused(p => !p);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update kiosk state');
+    } finally {
       setKioskToggling(false);
     }
   };
 
-  const { jobs = [], printerStatus = null, stats } = data ?? {};
+  const sendStatusToTelegram = async () => {
+    if (tgSending) return;
+    setTgSending(true);
+    setTgToast(null);
+    try {
+      const res = await fetch('/api/admin/send-status', { method: 'POST' });
+      const body = await res.json();
+      if (res.ok) {
+        setTgToast({ ok: true, msg: 'Status sent to Telegram ✓' });
+      } else {
+        setTgToast({ ok: false, msg: body.error ?? 'Failed to send' });
+      }
+    } catch {
+      setTgToast({ ok: false, msg: 'Network error' });
+    } finally {
+      setTgSending(false);
+      setTimeout(() => setTgToast(null), 4_000);
+    }
+  };
+
+  const { jobs = [], printerStatus = null, paperInventory = null, stats } = data ?? {};
   const safeStats: Stats = stats ?? {
     totalRevenue: 0, todayRevenue: 0, totalJobs: 0,
     todayJobs: 0, totalPages: 0, failedJobs: 0, printingJobs: 0,
   };
 
   return (
-    <div style={{
+    <div data-admin-dashboard style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%)',
       fontFamily: "'Inter', sans-serif",
       color: '#fff',
+      overflow: 'hidden',
     }}>
       {/* Idle warning toast */}
       {idleWarning !== null && (
@@ -360,9 +524,25 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         </div>
       )}
 
+      {/* Telegram send toast */}
+      {tgToast && (
+        <div style={{
+          position: 'fixed', bottom: idleWarning !== null ? 100 : 24, right: 24, zIndex: 9999,
+          background: tgToast.ok ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+          border: `1px solid ${tgToast.ok ? '#4ADE80' : '#EF4444'}`,
+          borderRadius: 12, padding: '12px 18px',
+          color: tgToast.ok ? '#4ADE80' : '#FCA5A5',
+          fontSize: '0.8rem', fontWeight: 600,
+          boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+        }}>
+          {tgToast.ok ? '✅' : '❌'} {tgToast.msg}
+        </div>
+      )}
+
       {/* Header */}
       <header style={{
-        padding: '20px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        flexWrap: 'wrap', gap: 12,
         borderBottom: '1px solid rgba(255,255,255,0.08)',
         background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(20px)',
         position: 'sticky', top: 0, zIndex: 100,
@@ -389,32 +569,50 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               )}
             </div>
             <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem' }}>
-              Auto-refreshes every 10s · Last: {lastRefresh.toLocaleTimeString('en-IN')}
+              Live updates · Last checked: {lastRefresh.toLocaleTimeString('en-IN')}
             </div>
           </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* Send status to Telegram */}
+          <button
+            onClick={sendStatusToTelegram}
+            disabled={tgSending}
+            title="Send current status to Telegram"
+            style={{
+              padding: '8px 14px', borderRadius: 8, border: 'none',
+              background: 'rgba(51,144,236,0.15)',
+              color: '#60A5FA',
+              cursor: tgSending ? 'not-allowed' : 'pointer',
+              fontSize: '0.8rem', fontWeight: 600, transition: 'all 0.2s',
+              opacity: tgSending ? 0.6 : 1,
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+            {tgSending ? 'Sending…' : 'Send to Telegram'}
+          </button>
           {/* A15: Pause/Resume kiosk toggle */}
           <button
             onClick={toggleKiosk}
             disabled={kioskToggling}
             style={{
-              padding: '8px 18px', borderRadius: 8, border: 'none',
-              background: kioskPaused
-                ? 'rgba(34,197,94,0.15)'
-                : 'rgba(245,158,11,0.15)',
+              padding: '8px 14px', borderRadius: 8, border: 'none',
+              background: kioskPaused ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
               color: kioskPaused ? '#4ADE80' : '#FBBF24',
               cursor: kioskToggling ? 'not-allowed' : 'pointer',
               fontSize: '0.8rem', fontWeight: 600, transition: 'all 0.2s',
               opacity: kioskToggling ? 0.6 : 1,
             }}
           >
-            {kioskPaused ? '▶ Resume Kiosk' : '⏸ Pause Kiosk'}
+            {kioskPaused ? '▶ Resume' : '⏸ Pause'}
           </button>
           <button
             onClick={onLogout}
             style={{
-              padding: '8px 18px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
+              padding: '8px 14px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
               background: 'transparent', color: 'rgba(255,255,255,0.6)', cursor: 'pointer',
               fontSize: '0.8rem', transition: 'all 0.2s',
             }}
@@ -424,7 +622,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         </div>
       </header>
 
-      <main style={{ padding: '32px', maxWidth: 1400, margin: '0 auto' }}>
+      <main style={{ padding: '16px 24px', maxWidth: '100%', boxSizing: 'border-box', overflowX: 'hidden' }}>
 
         {/* Printer Health Banner */}
         <div style={{ marginBottom: 24 }}>
@@ -434,8 +632,8 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
         {/* Stats Grid */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: 16, marginBottom: 32,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(205px, 1fr))',
+          gap: 12, marginBottom: 20,
         }}>
           <StatCard
             icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4F46E5" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>}
@@ -463,6 +661,8 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             color="#EF4444"
           />
         </div>
+
+        <PaperInventoryCard inventory={paperInventory} onUpdated={load} />
 
         {/* Jobs Table */}
         <div style={{
@@ -525,6 +725,11 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
                       </td>
                       <td style={{ padding: '14px 16px' }}>
                         <JobBadge type="job" val={job.job_status} />
+                        {job.job_status === 'PRINTING' && job.print_progress_known && (
+                          <div style={{ marginTop: 5, fontSize: '0.65rem', color: '#A5B4FC' }}>
+                            ~{job.estimated_sheets_printed} sheets estimated
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: '14px 16px', maxWidth: 200 }}>
                         {job.error_message ? (
@@ -548,67 +753,16 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           )}
         </div>
 
-        {/* Test Case Status Summary */}
-        <div style={{ marginTop: 32 }}>
-          <h2 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 16 }}>📋 Feature Status Report</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
-            {[
-              { label: 'User Flow (U1–U16)', done: 15, partial: 1, total: 16 },
-              { label: 'File Upload Edge Cases (F1–F7)', done: 7, partial: 0, total: 7 },
-              { label: 'Payment Edge Cases (P1–P7)', done: 7, partial: 0, total: 7 },
-              { label: 'Print Resume & Recovery (R1–R13)', done: 13, partial: 0, total: 13 },
-              { label: 'Printer Monitoring (PR1–PR6)', done: 6, partial: 0, total: 6 },
-              { label: 'Admin Console (A1–A15)', done: 15, partial: 0, total: 15 },
-              { label: 'Security (S1–S5)', done: 5, partial: 0, total: 5 },
-              { label: 'Notifications (N1–N4)', done: 2, partial: 1, total: 4, note: 'N3 daily report pending' },
-            ].map(s => (
-              <div key={s.label} style={{
-                background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
-                borderRadius: 12, padding: '16px 18px',
-              }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 10 }}>{s.label}</div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-                  <div style={{ flex: s.done, height: 6, borderRadius: 3, background: '#4ADE80' }} />
-                  {s.partial > 0 && <div style={{ flex: s.partial, height: 6, borderRadius: 3, background: '#FBBF24' }} />}
-                  <div style={{ flex: s.total - s.done - (s.partial ?? 0), height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.1)' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 12, fontSize: '0.7rem' }}>
-                  <span style={{ color: '#4ADE80' }}>✅ {s.done} done</span>
-                  {s.partial > 0 && <span style={{ color: '#FBBF24' }}>⚠️ {s.partial} partial</span>}
-                  <span style={{ color: 'rgba(255,255,255,0.3)' }}>{s.total} total</span>
-                </div>
-                {s.note && <div style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)', marginTop: 6 }}>{s.note}</div>}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Known Gaps */}
         <div style={{
-          marginTop: 24, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)',
+          marginTop: 24, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)',
           borderRadius: 16, padding: '20px 24px',
         }}>
-          <h2 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#FCA5A5', marginBottom: 16 }}>
-            🚨 Features NOT Yet Built (Will Get Stuck)
+          <h2 style={{ fontSize: '0.9rem', fontWeight: 600, color: '#FBBF24', marginBottom: 8 }}>
+            Verification note
           </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[
-              { id: 'N3', label: 'Daily Gmail summary report', risk: 'No passive overview of daily performance — needs cron scheduler' },
-              { id: 'SR2', label: 'DB backup at midnight', risk: 'No disaster recovery for database corruption' },
-              { id: 'U7', label: 'Actual duplex (double-sided) printing', risk: 'UI exists but actual duplex print depends on printer driver — HP LaserJet M1136 may not support duplex' },
-              { id: 'U4', label: 'Specific page range selection', risk: 'UI exists but page range is not passed to print-controller PDF slicing yet' },
-            ].map(g => (
-              <div key={g.id} style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                <span style={{
-                  padding: '2px 8px', borderRadius: 5, background: 'rgba(239,68,68,0.15)',
-                  color: '#EF4444', fontSize: '0.7rem', fontWeight: 700, whiteSpace: 'nowrap',
-                }}>{g.id}</span>
-                <div>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>{g.label}</div>
-                  <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: 2 }}>{g.risk}</div>
-                </div>
-              </div>
-            ))}
+          <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.65)' }}>
+            Automated checks do not verify physical printing, payment-provider behavior, scheduled email delivery,
+            or database backups. Test those against the deployed services and printer before relying on them.
           </div>
         </div>
 
@@ -633,6 +787,7 @@ export default function AdminPage() {
   const handleLogout = () => {
     sessionStorage.removeItem('admin_authed');
     setAuthed(false);
+    void fetch('/api/admin/logout', { method: 'POST' });
   };
 
   if (!authed) return <PinLogin onSuccess={handleSuccess} />;

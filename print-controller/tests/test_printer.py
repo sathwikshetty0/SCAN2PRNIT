@@ -78,7 +78,7 @@ def test_windows_command_is_correct(mock_run, _mock_platform):
 
     mock_run.assert_called_once()
     cmd = mock_run.call_args[0][0]
-    assert cmd[0] == 'SumatraPDF.exe'
+    assert Path(cmd[0]).name.lower() == 'sumatrapdf.exe'
     assert '-print-to' in cmd
     assert 'Microsoft Print to PDF' in cmd
     assert '-print-settings' in cmd
@@ -106,3 +106,69 @@ def test_print_error_raised_on_subprocess_exception(mock_run, _mock_platform):
     """PrintError must be raised when subprocess.run itself raises an exception."""
     with pytest.raises(PrintError):
         print_file(Path('/tmp/test.pdf'), 'Any_Printer', copies=1)
+
+
+@patch('printer.platform.system', return_value='Linux')
+@patch('printer.subprocess.run')
+def test_progress_callback_reports_expected_sheet_count_on_success(mock_run, _mock_platform):
+    mock_run.return_value = _make_completed_process(0)
+    progress = MagicMock()
+
+    print_file(Path('/tmp/test.pdf'), 'HP_LaserJet', copies=2,
+               expected_sheets=12, progress_callback=progress)
+
+    progress.assert_called_once_with(12)
+
+
+@patch('printer.platform.system', return_value='Linux')
+@patch('printer.subprocess.run')
+def test_progress_callback_does_not_report_completion_on_print_error(mock_run, _mock_platform):
+    mock_run.return_value = _make_completed_process(1, stderr=b'paper jam')
+    progress = MagicMock()
+
+    with pytest.raises(PrintError):
+        print_file(Path('/tmp/test.pdf'), 'HP_LaserJet', copies=1,
+                   expected_sheets=6, progress_callback=progress)
+
+    progress.assert_not_called()
+
+
+@patch('printer.time.sleep')
+@patch('printer._windows_printed_pages', side_effect=[0, None])
+@patch('printer.subprocess.Popen')
+@patch('printer.platform.system', return_value='Windows')
+def test_windows_reports_completion_only_after_spooler_job_disappears(
+    _mock_platform, mock_popen, _mock_pages, _mock_sleep
+):
+    process = MagicMock()
+    process.communicate.return_value = (b'', b'')
+    process.returncode = 0
+    mock_popen.return_value = process
+    progress = MagicMock()
+
+    print_file(Path('C:/tmp/job-123.pdf'), 'HP_LaserJet', copies=1,
+               expected_sheets=3, progress_callback=progress)
+
+    progress.assert_called_once_with(3)
+
+
+@patch('printer._windows_printed_pages', return_value=None)
+@patch('printer.subprocess.Popen')
+@patch('printer.platform.system', return_value='Windows')
+def test_windows_does_not_mark_printed_without_spooler_confirmation(
+    _mock_platform, mock_popen, _mock_pages, monkeypatch
+):
+    from printer import PrintError
+
+    process = MagicMock()
+    process.communicate.return_value = (b'', b'')
+    process.returncode = 0
+    mock_popen.return_value = process
+    monkeypatch.setattr('printer.WINDOWS_JOB_DISCOVERY_SECONDS', 0)
+    progress = MagicMock()
+
+    with pytest.raises(PrintError, match='completion could not be confirmed'):
+        print_file(Path('C:/tmp/job-123.pdf'), 'HP_LaserJet', copies=1,
+                   expected_sheets=3, progress_callback=progress)
+
+    progress.assert_not_called()

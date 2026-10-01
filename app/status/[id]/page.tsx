@@ -6,8 +6,27 @@ import StepIndicator from '@/components/StepIndicator';
 import { PrintJob } from '@/types/print-job';
 import { createClient } from '@/lib/supabase/client';
 
+interface PrinterStatus {
+  is_online: boolean;
+  error_type: string | null;
+  error_message: string | null;
+  printer_name: string | null;
+}
+
 /* ─── Rich state card ──────────────────────────────────────── */
-function StatusCard({ job }: { job: PrintJob }) {
+type StatusJob = Pick<
+  PrintJob,
+  | 'id'
+  | 'job_status'
+  | 'payment_status'
+  | 'error_message'
+  | 'page_count'
+  | 'copies'
+  | 'estimated_sheets_printed'
+  | 'print_progress_known'
+>;
+
+function StatusCard({ job }: { job: StatusJob }) {
   const status = job.job_status;
   const payment = job.payment_status;
 
@@ -70,6 +89,11 @@ function StatusCard({ job }: { job: PrintJob }) {
         <p style={{ color: '#1E40AF', fontSize: '0.9rem' }}>
           Please stand by — your pages are being printed.
         </p>
+        {job.print_progress_known && (
+          <p style={{ color: '#1E40AF', fontSize: '0.8rem', marginTop: 8 }}>
+            Approximately {job.estimated_sheets_printed ?? 0} of {job.page_count * job.copies} sheets printed
+          </p>
+        )}
         <ProgressDots />
       </div>
     );
@@ -120,6 +144,11 @@ function StatusCard({ job }: { job: PrintJob }) {
             padding: '10px 16px', marginTop: 12, wordBreak: 'break-word',
           }}>
             {job.error_message}
+          </p>
+        )}
+        {job.print_progress_known && (
+          <p style={{ color: '#991B1B', fontSize: '0.8rem', marginTop: 10 }}>
+            Approximately {job.estimated_sheets_printed ?? 0} of {job.page_count * job.copies} sheets were printed.
           </p>
         )}
         <p style={{ color: '#6B7280', fontSize: '0.8rem', marginTop: 16 }}>
@@ -182,22 +211,20 @@ export default function StatusPage() {
   const params = useParams();
   const jobId = (params?.id as string) || '';
 
-  const [job,     setJob]     = useState<PrintJob | null>(null);
+  const [job,     setJob]     = useState<StatusJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
+  const [printerStatus, setPrinterStatus] = useState<PrinterStatus | null>(null);
 
   const supabaseRef = useRef(createClient());
 
   const fetchJobStatus = async () => {
     try {
-      const { data, error: dbError } = await supabaseRef.current
-        .from('print_jobs')
-        .select('*')
-        .eq('id', jobId)
-        .single();
-
-      if (dbError || !data) throw new Error('Print job not found.');
-      setJob(data as PrintJob);
+      const response = await fetch(`/api/print-status/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? 'Could not load print status');
+      setJob(body.job as StatusJob);
+      setPrinterStatus(body.printerStatus as PrinterStatus | null);
       setError(null);
     } catch (err: unknown) {
       setError((err as Error).message || 'Error fetching status');
@@ -211,7 +238,7 @@ export default function StatusPage() {
 
     fetchJobStatus();
 
-    // Supabase Realtime subscription — primary update mechanism
+    // Printer errors are public health state; job details stay behind the status endpoint.
     const channel = supabaseRef.current
       .channel(`job-status-${jobId}`)
       .on(
@@ -219,20 +246,16 @@ export default function StatusPage() {
         {
           event: '*',
           schema: 'public',
-          table: 'print_jobs',
-          filter: `id=eq.${jobId}`,
+          table: 'printer_status',
+          filter: 'id=eq.00000000-0000-0000-0000-000000000001',
         },
         (payload) => {
-          if (payload.new) {
-            setJob(payload.new as PrintJob);
-            setError(null);
-          }
+          if (payload.new) setPrinterStatus(payload.new as PrinterStatus);
         },
       )
       .subscribe();
 
-    // Polling every 10s as fallback
-    const interval = setInterval(fetchJobStatus, 10_000);
+    const interval = setInterval(fetchJobStatus, 3_000);
 
     return () => {
       supabaseRef.current.removeChannel(channel);
@@ -277,7 +300,25 @@ export default function StatusPage() {
               {error}
             </div>
           ) : job ? (
-            <StatusCard job={job} />
+            <>
+              <StatusCard job={job} />
+              {job.job_status !== 'PRINTED' && job.job_status !== 'FAILED'
+                && printerStatus && (!printerStatus.is_online || printerStatus.error_type) && (
+                <div
+                  role="alert"
+                  aria-live="assertive"
+                  style={{
+                    marginTop: 16, borderRadius: 12, padding: 16,
+                    color: '#9A3412', background: '#FFF7ED', border: '1px solid #FDBA74',
+                  }}
+                >
+                  <strong>{printerStatus.error_message ?? 'Printer issue detected'}</strong>
+                  <div style={{ fontSize: '0.82rem', marginTop: 4 }}>
+                    Your job is not marked ready for collection. Please wait while the printer issue is resolved.
+                  </div>
+                </div>
+              )}
+            </>
           ) : null}
         </div>
       </div>

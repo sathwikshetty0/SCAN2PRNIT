@@ -27,16 +27,24 @@ export default function PriceSummary({
 
       <div className="price-row">
         <span>Price per page</span>
-        <span>{fmt(perPagePrice, currency)}</span>
+        <span data-testid="per-page-price">{fmt(perPagePrice, currency)}</span>
       </div>
       <div className="price-row">
         <span>Pages × Copies</span>
-        <span>{pageCount} × {copies} = {totalPages} pages</span>
+        <span>
+          <span data-testid="page-count">{pageCount}</span>
+          {' × '}
+          <span data-testid="copies">{copies}</span>
+          {' = '}
+          {totalPages} pages
+        </span>
       </div>
 
       <div className="price-total-row">
         <span className="price-total-label">Total</span>
-        <span className="price-total-amount" aria-live="polite">{fmt(total, currency)}</span>
+        <span className="price-total-amount" aria-live="polite" data-testid="total">
+          {fmt(total, currency)}
+        </span>
       </div>
     </div>
   );
