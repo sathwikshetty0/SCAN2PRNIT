@@ -2,34 +2,52 @@
 
 import React, { Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import StepIndicator from '@/components/StepIndicator';
 
-function PaymentSuccessContent() {
+function SuccessContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const jobId = searchParams.get('job_id');
 
   return (
-    <div className="flex flex-col gap-6">
-      <StepIndicator currentStep={3} />
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col items-center gap-4 text-center">
-        <div className="w-12 h-12 rounded-full bg-green-100 text-green-600 flex items-center justify-center text-2xl font-bold">
-          ✓
-        </div>
-        <h1 className="text-xl font-bold text-gray-900">Payment Successful!</h1>
-        <p className="text-sm text-gray-600">
-          Your payment has been received. Your document is queued for printing.
-        </p>
-        <p className="text-xs text-gray-500">Estimated wait time: ~1–2 minutes</p>
+    <div className="card text-center" style={{ paddingTop: 40, paddingBottom: 40 }}>
+      <div className="success-icon">
+        <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-hidden="true">
+          <path d="M8 18l7 7 13-13" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </div>
 
+      <h1 className="page-title" style={{ marginBottom: 8 }}>Payment Successful!</h1>
+      <p className="page-subtitle" style={{ marginBottom: 24 }}>
+        Your payment was confirmed. Your document is queued for printing.
+      </p>
+
+      {jobId && (
+        <div style={{
+          background: 'var(--gray-50)',
+          border: '1px solid var(--gray-200)',
+          borderRadius: 'var(--radius-md)',
+          padding: '12px 16px',
+          marginBottom: 24,
+          fontSize: '0.8rem',
+          color: 'var(--gray-500)',
+        }}>
+          <span style={{ fontWeight: 600, color: 'var(--gray-700)' }}>Job ID:</span>{' '}
+          <span style={{ fontFamily: 'monospace' }}>{jobId}</span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {jobId && (
           <button
-            onClick={() => router.push(`/status/${jobId}`)}
-            className="mt-4 w-full rounded-xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors min-h-[44px]"
+            className="btn-primary"
+            onClick={() => router.push(`/status?job_id=${jobId}`)}
           >
-            Track Print Status
+            Track Print Status →
           </button>
         )}
+        <button className="btn-secondary" onClick={() => router.push('/')}>
+          Print Another Document
+        </button>
       </div>
     </div>
   );
@@ -37,8 +55,8 @@ function PaymentSuccessContent() {
 
 export default function PaymentSuccessPage() {
   return (
-    <Suspense fallback={<div className="text-center p-8 text-gray-500">Loading...</div>}>
-      <PaymentSuccessContent />
+    <Suspense fallback={<div className="card text-center" style={{ padding: 48 }}><div className="spinner" style={{ margin: '0 auto' }} /></div>}>
+      <SuccessContent />
     </Suspense>
   );
 }

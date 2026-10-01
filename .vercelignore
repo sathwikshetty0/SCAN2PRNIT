@@ -1,0 +1,21 @@
+# Exclude the Python print controller — it runs locally on the kiosk machine,
+# not on Vercel. Vercel only deploys the Next.js web app.
+print-controller/
+
+# Python artifacts
+*.py
+*.pyc
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+.hypothesis/
+.pytest_cache/
+
+# Local env
+.env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+.nyc_output/

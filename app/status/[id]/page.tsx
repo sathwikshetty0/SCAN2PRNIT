@@ -4,28 +4,26 @@ import React, { useEffect, useState, use } from 'react';
 import StepIndicator from '@/components/StepIndicator';
 import StatusDisplay from '@/components/StatusDisplay';
 import { PrintJob } from '@/types/print-job';
-import { createBrowserClient } from '@/lib/supabase/client';
+import { createClient } from '@/lib/supabase/client';
 
 export default function StatusPage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const jobId = resolvedParams.id;
 
-  const [job, setJob] = useState<PrintJob | null>(null);
+  const [job,     setJob]     = useState<PrintJob | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
 
   const fetchJobStatus = async () => {
     try {
-      const supabase = createBrowserClient();
+      const supabase = createClient();
       const { data, error: dbError } = await supabase
         .from('print_jobs')
         .select('*')
         .eq('id', jobId)
         .single();
 
-      if (dbError || !data) {
-        throw new Error('Print job not found.');
-      }
+      if (dbError || !data) throw new Error('Print job not found.');
       setJob(data as PrintJob);
       setError(null);
     } catch (err: any) {
@@ -37,21 +35,34 @@ export default function StatusPage({ params }: { params: Promise<{ id: string }>
 
   useEffect(() => {
     fetchJobStatus();
-    const interval = setInterval(fetchJobStatus, 10000); // Poll every 10s
+    const interval = setInterval(fetchJobStatus, 10_000);
     return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <StepIndicator currentStep={4} />
+    <div>
+      <StepIndicator currentStep={3} />
 
-      <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col gap-4">
-        <h1 className="text-xl font-bold text-gray-900 text-center">Print Job Status</h1>
+      <div className="card">
+        <h1 className="page-title" style={{ textAlign: 'center', marginBottom: 4 }}>Print Status</h1>
+        <p className="page-subtitle" style={{ textAlign: 'center', marginBottom: 24 }}>
+          Auto-refreshes every 10 seconds
+        </p>
 
         {loading ? (
-          <div className="text-center py-8 text-gray-500 text-sm">Checking job status...</div>
+          <div style={{ textAlign: 'center', padding: '32px 0' }}>
+            <div className="spinner" style={{ margin: '0 auto 12px' }} />
+            <p className="loading-text">Checking job status…</p>
+          </div>
         ) : error ? (
-          <div className="text-center py-8 text-red-600 text-sm font-medium">{error}</div>
+          <div className="alert-error" role="alert">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}>
+              <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M8 5v3M8 11h.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+            {error}
+          </div>
         ) : job ? (
           <StatusDisplay job={job} />
         ) : null}
