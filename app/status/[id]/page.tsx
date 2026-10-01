@@ -1,14 +1,15 @@
 'use client';
 
-import React, { useEffect, useState, use } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import StepIndicator from '@/components/StepIndicator';
 import StatusDisplay from '@/components/StatusDisplay';
 import { PrintJob } from '@/types/print-job';
 import { createClient } from '@/lib/supabase/client';
 
-export default function StatusPage({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = use(params);
-  const jobId = resolvedParams.id;
+export default function StatusPage() {
+  const params = useParams();
+  const jobId = (params?.id as string) || '';
 
   const [job,     setJob]     = useState<PrintJob | null>(null);
   const [loading, setLoading] = useState(true);

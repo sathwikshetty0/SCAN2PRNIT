@@ -35,12 +35,31 @@ def print_file(file_path: Path, printer_name: str, copies: int) -> None:
     system = platform.system()
 
     if system == "Windows":
-        cmd = [
-            "SumatraPDF.exe",
-            "-print-to", printer_name,
-            "-print-settings", f"{copies}x",
-            str(file_path),
+        import os
+        import shutil
+        possible_paths = [
+            shutil.which("SumatraPDF.exe"),
+            shutil.which("SumatraPDF"),
+            os.path.expandvars(r"%LOCALAPPDATA%\SumatraPDF\SumatraPDF.exe"),
+            r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         ]
+        sumatra = next((p for p in possible_paths if p and os.path.exists(p)), None)
+        if sumatra:
+            cmd = [
+                sumatra,
+                "-print-to", printer_name,
+                "-print-settings", f"{copies}x",
+                str(file_path),
+            ]
+        else:
+            # Fallback to native Windows printing
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                f'Start-Process -FilePath "{file_path}" -Verb PrintTo -ArgumentList "\'{printer_name}\'"',
+            ]
     else:
         # Linux and macOS both use CUPS via the `lp` command.
         cmd = [
