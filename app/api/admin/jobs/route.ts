@@ -14,13 +14,19 @@ export async function GET() {
 
     if (jobsError) throw jobsError;
 
-    // Fetch printer status
-    const { data: printerRows } = await supabase
-      .from('printer_status')
-      .select('*')
-      .limit(1);
-
-    const printerStatus = printerRows?.[0] ?? null;
+    // Fetch printer status — tolerate table-not-found gracefully
+    let printerStatus = null;
+    try {
+      const { data: printerRows, error: printerError } = await supabase
+        .from('printer_status')
+        .select('*')
+        .limit(1);
+      if (!printerError) {
+        printerStatus = printerRows?.[0] ?? null;
+      }
+    } catch {
+      // printer_status table may not exist yet — dashboard shows "unknown"
+    }
 
     // Compute stats
     const paid = jobs?.filter(j => j.payment_status === 'PAID') ?? [];
@@ -39,6 +45,10 @@ export async function GET() {
 
     return NextResponse.json({ jobs, printerStatus, stats });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error('[admin/jobs] error:', err);
+    return NextResponse.json(
+      { error: err?.message ?? 'Unknown error', details: err?.details ?? null },
+      { status: 500 },
+    );
   }
 }

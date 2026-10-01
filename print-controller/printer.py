@@ -44,22 +44,18 @@ def print_file(file_path: Path, printer_name: str, copies: int) -> None:
             r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
         ]
         sumatra = next((p for p in possible_paths if p and os.path.exists(p)), None)
-        if sumatra:
-            cmd = [
-                sumatra,
-                "-print-to", printer_name,
-                "-print-settings", f"{copies}x",
-                str(file_path),
-            ]
-        else:
-            # Fallback to native Windows printing
-            cmd = [
-                "powershell",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                f'Start-Process -FilePath "{file_path}" -Verb PrintTo -ArgumentList "\'{printer_name}\'"',
-            ]
+        if not sumatra:
+            raise PrintError(
+                "SumatraPDF.exe not found. Please install SumatraPDF from "
+                "https://www.sumatrapdfreader.org and ensure it is in PATH "
+                "or at %LOCALAPPDATA%\\SumatraPDF\\SumatraPDF.exe"
+            )
+        cmd = [
+            sumatra,
+            "-print-to", printer_name,
+            "-print-settings", f"{copies}x",
+            str(file_path),
+        ]
     else:
         # Linux and macOS both use CUPS via the `lp` command.
         cmd = [
