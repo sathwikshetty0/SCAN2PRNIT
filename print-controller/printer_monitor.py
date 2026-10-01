@@ -69,7 +69,7 @@ def _get_printer_status_windows(printer_name: str) -> dict:
         if error_state & 8:
             return {"is_online": True, "error_type": "paper_empty", "error_message": "Printer is out of paper"}
         if error_state & 4:
-            return {"is_online": True, "error_type": "paper_empty", "error_message": "Printer paper is low"}
+            return {"is_online": True, "error_type": "paper_low", "error_message": "Paper is running low (approx. 15 sheets remaining)"}
         if error_state & 128:
             return {"is_online": True, "error_type": "paper_jam", "error_message": "Paper jam detected"}
         if error_state & 32:

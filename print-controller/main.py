@@ -3,6 +3,7 @@ main.py — Entry point for the Python Print Controller.
 
 Requirements: 10.2, 10.3, 11.1, 11.4, 11.5, 11.6, 12.1, 12.3, 15.1, 15.2
 """
+import os
 import time
 import tempfile
 from pathlib import Path
@@ -16,6 +17,10 @@ from validator import is_valid_pdf
 from printer import print_file, PrintError
 from updater import mark_printed, mark_failed
 from printer_monitor import update_printer_status
+from telegram_notify import notify_printer_error, notify_paper_low, notify_job_failed
+
+# Cooldown tracker: error_type -> last notification timestamp
+_last_notified: dict = {}
 
 
 def recover_stale_jobs(supabase: Client) -> None:
@@ -39,7 +44,10 @@ def recover_stale_jobs(supabase: Client) -> None:
         logger.error("Error recovering stale jobs: %s", e)
 
 
-def run_one_cycle(supabase: Client, config: Config) -> None:
+_TELEGRAM_COOLDOWN_SECONDS = 300  # 5 minutes between repeat alerts for same error
+
+
+def run_one_cycle(supabase: Client, config: Config, telegram_token: str = "", telegram_chat_id: str = "") -> None:
     """
     Executes one polling cycle:
     1. Check printer health
@@ -52,6 +60,21 @@ def run_one_cycle(supabase: Client, config: Config) -> None:
     """
     # Always update printer health in Supabase
     health = update_printer_status(supabase, config.printer_name)
+
+    # Send Telegram alerts for printer errors (with cooldown)
+    now = time.time()
+    error_type = health.get("error_type")
+    if error_type in ("paper_empty", "paper_jam", "offline"):
+        last = _last_notified.get(error_type, 0)
+        if now - last >= _TELEGRAM_COOLDOWN_SECONDS:
+            notify_printer_error(telegram_token, telegram_chat_id, error_type,
+                                 health["error_message"], config.printer_name)
+            _last_notified[error_type] = now
+    elif error_type == "paper_low":
+        last = _last_notified.get("paper_low", 0)
+        if now - last >= _TELEGRAM_COOLDOWN_SECONDS:
+            notify_paper_low(telegram_token, telegram_chat_id, config.printer_name)
+            _last_notified["paper_low"] = now
 
     # Block printing if printer has a hard error
     if not health["is_online"] or health["error_type"] in ("paper_empty", "paper_jam", "offline"):
@@ -103,6 +126,7 @@ def run_one_cycle(supabase: Client, config: Config) -> None:
     except PrintError as e:
         logger.error("Job %s failed during printing: %s", job_id, e)
         mark_failed(supabase, job_id, str(e))
+        notify_job_failed(telegram_token, telegram_chat_id, job_id, str(e))
         # After a print failure, re-check printer health and update status
         update_printer_status(supabase, config.printer_name)
     except Exception as e:
@@ -124,12 +148,15 @@ def run_forever(config: Config) -> None:
     supabase = create_client(config.supabase_url, config.supabase_service_role_key)
     recover_stale_jobs(supabase)
 
+    telegram_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+
     # Immediately update printer status on startup
     update_printer_status(supabase, config.printer_name)
 
     while True:
         try:
-            run_one_cycle(supabase, config)
+            run_one_cycle(supabase, config, telegram_token, telegram_chat_id)
         except Exception as e:
             logger.exception("Unhandled exception in polling loop: %s", e)
         time.sleep(config.poll_interval)

@@ -28,6 +28,17 @@ export async function GET() {
       // printer_status table may not exist yet — dashboard shows "unknown"
     }
 
+    // Fetch kiosk paused state
+    let kioskPaused = false;
+    try {
+      const { data: ks } = await supabase
+        .from('kiosk_settings')
+        .select('is_paused')
+        .eq('id', '00000000-0000-0000-0000-000000000001')
+        .single();
+      kioskPaused = ks?.is_paused ?? false;
+    } catch {}
+
     // Compute stats
     const paid = jobs?.filter(j => j.payment_status === 'PAID') ?? [];
     const today = new Date().toISOString().slice(0, 10);
@@ -43,7 +54,7 @@ export async function GET() {
       printingJobs:    jobs?.filter(j => j.job_status === 'PRINTING').length ?? 0,
     };
 
-    return NextResponse.json({ jobs, printerStatus, stats });
+    return NextResponse.json({ jobs, printerStatus, stats, kioskPaused });
   } catch (err: any) {
     console.error('[admin/jobs] error:', err);
     return NextResponse.json(

@@ -21,6 +21,8 @@ class Config:
     supabase_service_role_key: str
     printer_name: str
     poll_interval: int  # seconds, range 5–300
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
 
 
 def load_config() -> Config:
@@ -49,9 +51,14 @@ def load_config() -> Config:
         poll_interval = 10
     poll_interval = max(5, min(300, poll_interval))
 
+    telegram_bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    telegram_chat_id   = os.environ.get('TELEGRAM_CHAT_ID', '')
+
     return Config(
         supabase_url=supabase_url,
         supabase_service_role_key=supabase_service_role_key,
         printer_name=printer_name,
         poll_interval=poll_interval,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
     )

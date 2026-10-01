@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { PrintJob } from '@/types/print-job';
+import { createClient } from '@/lib/supabase/client';
 
 /* ─── Types ──────────────────────────────────────────────── */
 interface PrinterStatus {
@@ -229,10 +230,45 @@ function JobBadge({ type, val }: { type: 'job' | 'payment'; val: string }) {
 
 /* ─── Main Dashboard ─────────────────────────────────────── */
 function Dashboard({ onLogout }: { onLogout: () => void }) {
-  const [data, setData]       = useState<{ jobs: PrintJob[]; printerStatus: PrinterStatus | null; stats: Stats } | null>(null);
+  const [data, setData]       = useState<{ jobs: PrintJob[]; printerStatus: PrinterStatus | null; stats: Stats; kioskPaused: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [kioskPaused, setKioskPaused] = useState(false);
+  const [kioskToggling, setKioskToggling] = useState(false);
+
+  // Idle auto-logout (A5) — 30 min idle timeout, 60s warning
+  const idleTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const warningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [idleWarning, setIdleWarning] = useState<number | null>(null); // countdown seconds
+
+  const resetIdleTimer = useCallback(() => {
+    if (idleTimerRef.current)    clearTimeout(idleTimerRef.current);
+    if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+    setIdleWarning(null);
+
+    // 29 min: start warning countdown
+    warningTimerRef.current = setTimeout(() => {
+      let remaining = 60;
+      setIdleWarning(remaining);
+      const tick = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearInterval(tick);
+          setIdleWarning(null);
+        } else {
+          setIdleWarning(remaining);
+        }
+      }, 1_000);
+      // Keep reference so we can clear it
+      (warningTimerRef.current as unknown as { _tick: ReturnType<typeof setInterval> })._tick = tick;
+    }, 29 * 60 * 1_000);
+
+    // 30 min: logout
+    idleTimerRef.current = setTimeout(() => {
+      onLogout();
+    }, 30 * 60 * 1_000);
+  }, [onLogout]);
 
   const load = useCallback(async () => {
     try {
@@ -240,10 +276,11 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
       if (!res.ok) throw new Error('Failed to load data');
       const json = await res.json();
       setData(json);
+      setKioskPaused(json.kioskPaused ?? false);
       setLastRefresh(new Date());
       setError(null);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError((e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -251,9 +288,47 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   useEffect(() => {
     load();
-    const iv = setInterval(load, 10_000); // auto-refresh every 10s
-    return () => clearInterval(iv);
-  }, [load]);
+
+    // Supabase Realtime subscription (2a)
+    const supabase = createClient();
+    const channel = supabase
+      .channel('admin-print-jobs')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'print_jobs' }, () => load())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'print_jobs' }, () => load())
+      .subscribe();
+
+    const iv = setInterval(load, 10_000); // fallback polling
+
+    // Idle timer setup (A5)
+    resetIdleTimer();
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart'] as const;
+    events.forEach(ev => document.addEventListener(ev, resetIdleTimer));
+
+    return () => {
+      clearInterval(iv);
+      supabase.removeChannel(channel);
+      if (idleTimerRef.current)    clearTimeout(idleTimerRef.current);
+      if (warningTimerRef.current) clearTimeout(warningTimerRef.current);
+      events.forEach(ev => document.removeEventListener(ev, resetIdleTimer));
+    };
+  }, [load, resetIdleTimer]);
+
+  const toggleKiosk = async () => {
+    if (kioskToggling) return;
+    setKioskToggling(true);
+    try {
+      const res = await fetch('/api/admin/kiosk-pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paused: !kioskPaused }),
+      });
+      if (res.ok) {
+        setKioskPaused(p => !p);
+      }
+    } catch { /* ignore */ } finally {
+      setKioskToggling(false);
+    }
+  };
 
   const { jobs = [], printerStatus = null, stats } = data ?? {};
   const safeStats: Stats = stats ?? {
@@ -268,6 +343,23 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
       fontFamily: "'Inter', sans-serif",
       color: '#fff',
     }}>
+      {/* Idle warning toast */}
+      {idleWarning !== null && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#1F2937', border: '1px solid #F59E0B',
+          borderRadius: 12, padding: '14px 20px',
+          maxWidth: 340, boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ color: '#F59E0B', fontWeight: 700, fontSize: '0.875rem', marginBottom: 4 }}>
+            ⚠️ Session expiring
+          </div>
+          <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.8rem' }}>
+            Session expires in {idleWarning} second{idleWarning === 1 ? '' : 's'} — move mouse to stay logged in
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header style={{
         padding: '20px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -286,22 +378,50 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
             </svg>
           </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>Admin Dashboard</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>Admin Dashboard</span>
+              {kioskPaused && (
+                <span style={{
+                  padding: '2px 10px', borderRadius: 6,
+                  background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.5)',
+                  color: '#EF4444', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em',
+                }}>PAUSED</span>
+              )}
+            </div>
             <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.7rem' }}>
               Auto-refreshes every 10s · Last: {lastRefresh.toLocaleTimeString('en-IN')}
             </div>
           </div>
         </div>
-        <button
-          onClick={onLogout}
-          style={{
-            padding: '8px 18px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
-            background: 'transparent', color: 'rgba(255,255,255,0.6)', cursor: 'pointer',
-            fontSize: '0.8rem', transition: 'all 0.2s',
-          }}
-        >
-          Logout
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* A15: Pause/Resume kiosk toggle */}
+          <button
+            onClick={toggleKiosk}
+            disabled={kioskToggling}
+            style={{
+              padding: '8px 18px', borderRadius: 8, border: 'none',
+              background: kioskPaused
+                ? 'rgba(34,197,94,0.15)'
+                : 'rgba(245,158,11,0.15)',
+              color: kioskPaused ? '#4ADE80' : '#FBBF24',
+              cursor: kioskToggling ? 'not-allowed' : 'pointer',
+              fontSize: '0.8rem', fontWeight: 600, transition: 'all 0.2s',
+              opacity: kioskToggling ? 0.6 : 1,
+            }}
+          >
+            {kioskPaused ? '▶ Resume Kiosk' : '⏸ Pause Kiosk'}
+          </button>
+          <button
+            onClick={onLogout}
+            style={{
+              padding: '8px 18px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)',
+              background: 'transparent', color: 'rgba(255,255,255,0.6)', cursor: 'pointer',
+              fontSize: '0.8rem', transition: 'all 0.2s',
+            }}
+          >
+            Logout
+          </button>
+        </div>
       </header>
 
       <main style={{ padding: '32px', maxWidth: 1400, margin: '0 auto' }}>
@@ -438,7 +558,7 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               { label: 'Payment Edge Cases (P1–P7)', done: 7, partial: 0, total: 7 },
               { label: 'Print Resume & Recovery (R1–R13)', done: 13, partial: 0, total: 13 },
               { label: 'Printer Monitoring (PR1–PR6)', done: 6, partial: 0, total: 6 },
-              { label: 'Admin Console (A1–A15)', done: 14, partial: 0, total: 15, note: 'A15 (Pause/Resume) pending' },
+              { label: 'Admin Console (A1–A15)', done: 15, partial: 0, total: 15 },
               { label: 'Security (S1–S5)', done: 5, partial: 0, total: 5 },
               { label: 'Notifications (N1–N4)', done: 2, partial: 1, total: 4, note: 'N3 daily report pending' },
             ].map(s => (
@@ -473,7 +593,6 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
           </h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {[
-              { id: 'A15', label: 'Admin Pause/Resume kiosk', risk: 'No way to gracefully take kiosk offline for maintenance' },
               { id: 'N3', label: 'Daily Gmail summary report', risk: 'No passive overview of daily performance — needs cron scheduler' },
               { id: 'SR2', label: 'DB backup at midnight', risk: 'No disaster recovery for database corruption' },
               { id: 'U7', label: 'Actual duplex (double-sided) printing', risk: 'UI exists but actual duplex print depends on printer driver — HP LaserJet M1136 may not support duplex' },
